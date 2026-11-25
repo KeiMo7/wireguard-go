@@ -67,6 +67,18 @@ type Device struct {
 	indexTable    IndexTable
 	cookieChecker CookieChecker
 
+	roamConfig struct {
+		sync.RWMutex
+		initialized bool
+		policy      RoamPolicy
+		window      time.Duration
+		maxUpdates  uint32
+	}
+	roamLedger roamRing
+	// roamClock, when non-nil, replaces time.Now for all new time reads. It
+	// defaults to nil, which means the ordinary wall clock is used.
+	roamClock atomic.Pointer[func() time.Time]
+
 	pool struct {
 		inboundElementsContainer  *WaitPool
 		outboundElementsContainer *WaitPool
@@ -297,6 +309,7 @@ func NewDevice(tunDevice tun.Device, bind conn.Bind, logger *Logger) *Device {
 	device.peers.keyMap = make(map[NoisePublicKey]*Peer)
 	device.rate.limiter.Init()
 	device.indexTable.Init()
+	device.initRoamGuard()
 
 	device.PopulatePools()
 
@@ -411,7 +424,7 @@ func (device *Device) SendKeepalivesToPeersWithCurrentKeypair() {
 	device.peers.RLock()
 	for _, peer := range device.peers.keyMap {
 		peer.keypairs.RLock()
-		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(RejectAfterTime).Before(time.Now())
+		sendKeepalive := peer.keypairs.current != nil && !peer.keypairs.current.created.Add(RejectAfterTime).Before(device.now())
 		peer.keypairs.RUnlock()
 		if sendKeepalive {
 			peer.SendKeepalive()

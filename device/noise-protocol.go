@@ -666,7 +666,7 @@ func (peer *Peer) BeginSymmetricSession() error {
 	setZero(sendKey[:])
 	setZero(recvKey[:])
 
-	keypair.created = time.Now()
+	keypair.created = device.now()
 	keypair.replayFilter.Reset()
 	keypair.isInitiator = isInitiator
 	keypair.localIndex = peer.handshake.localIndex
@@ -681,12 +681,12 @@ func (peer *Peer) BeginSymmetricSession() error {
 
 	keypairs := &peer.keypairs
 	keypairs.Lock()
-	defer keypairs.Unlock()
 
 	previous := keypairs.previous
 	next := keypairs.next.Load()
 	current := keypairs.current
 
+	var installedEpoch uint64
 	if isInitiator {
 		if next != nil {
 			keypairs.next.Store(nil)
@@ -697,11 +697,23 @@ func (peer *Peer) BeginSymmetricSession() error {
 		}
 		device.DeleteKeypair(previous)
 		keypairs.current = keypair
+		// Initiator installation opens a new generation.
+		installedEpoch = peer.keyEpoch.Add(1)
+		keypair.epoch = installedEpoch
+		keypairs.Unlock()
+
+		// Installations only count initiator current installations.
+		peer.roam.installations.Add(1)
+		peer.recordKeypairEvent(RoamEventKeypairInstalled, installedEpoch)
 	} else {
+		// The responder reserves the next generation now; keyEpoch advances
+		// only once that keypair is promoted in ReceivedWithKeypair.
+		keypair.epoch = peer.keyEpoch.Load() + 1
 		keypairs.next.Store(keypair)
 		device.DeleteKeypair(next)
 		keypairs.previous = nil
 		device.DeleteKeypair(previous)
+		keypairs.Unlock()
 	}
 
 	return nil
@@ -714,8 +726,8 @@ func (peer *Peer) ReceivedWithKeypair(receivedKeypair *Keypair) bool {
 		return false
 	}
 	keypairs.Lock()
-	defer keypairs.Unlock()
 	if keypairs.next.Load() != receivedKeypair {
+		keypairs.Unlock()
 		return false
 	}
 	old := keypairs.previous
@@ -723,5 +735,13 @@ func (peer *Peer) ReceivedWithKeypair(receivedKeypair *Keypair) bool {
 	peer.device.DeleteKeypair(old)
 	keypairs.current = keypairs.next.Load()
 	keypairs.next.Store(nil)
+	promotedEpoch := receivedKeypair.epoch
+	keypairs.Unlock()
+
+	// The responder's generation catches up to the promoted next keypair.
+	peer.keyEpoch.Store(promotedEpoch)
+	// Promotions only count responder next-keypair promotions.
+	peer.roam.promotions.Add(1)
+	peer.recordKeypairEvent(RoamEventKeypairPromoted, promotedEpoch)
 	return true
 }

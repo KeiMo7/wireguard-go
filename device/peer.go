@@ -25,11 +25,35 @@ type Peer struct {
 	rxBytes           atomic.Uint64  // bytes received from peer
 	lastHandshakeNano atomic.Int64   // nano seconds since epoch
 
+	// keyEpoch is the current key generation. It advances on initiator
+	// keypair installation, responder next-keypair promotion and when key
+	// material is expired or zeroed.
+	keyEpoch atomic.Uint64
+
+	roam struct {
+		adoptions         atomic.Uint64
+		rejections        atomic.Uint64
+		policyRejections  atomic.Uint64
+		staleRejections   atomic.Uint64
+		rateRejections    atomic.Uint64
+		lastChange        atomic.Int64 // unix nano of the latest adoption
+		installations     atomic.Uint64
+		promotions        atomic.Uint64
+		expirations       atomic.Uint64
+		handshakeFailures atomic.Uint64
+	}
+
 	endpoint struct {
 		sync.Mutex
 		val            conn.Endpoint
 		clearSrcOnTx   bool // signal to val.ClearSrc() prior to next packet transmission
 		disableRoaming bool
+		// RoamLimited sliding-window state and the RoamPinned first-endpoint
+		// latch. All guarded by the endpoint mutex.
+		roamWindowStart time.Time
+		roamWindowCount uint32
+		roamFrozen      bool
+		roamPinned      bool
 	}
 
 	timers struct {
@@ -235,6 +259,10 @@ func (peer *Peer) ZeroAndFlushAll() {
 	handshake.mutex.Unlock()
 
 	peer.FlushStagedPackets()
+
+	// Advance the key generation and record the zeroing event.
+	epoch := peer.keyEpoch.Add(1)
+	peer.recordKeypairEvent(RoamEventKeypairZeroed, epoch)
 }
 
 func (peer *Peer) ExpireCurrentKeypairs() {
@@ -242,7 +270,7 @@ func (peer *Peer) ExpireCurrentKeypairs() {
 	handshake.mutex.Lock()
 	peer.device.indexTable.Delete(handshake.localIndex)
 	handshake.Clear()
-	peer.handshake.lastSentHandshake = time.Now().Add(-(RekeyTimeout + time.Second))
+	peer.handshake.lastSentHandshake = peer.device.now().Add(-(RekeyTimeout + time.Second))
 	handshake.mutex.Unlock()
 
 	keypairs := &peer.keypairs
@@ -254,6 +282,12 @@ func (peer *Peer) ExpireCurrentKeypairs() {
 		next.sendNonce.Store(RejectAfterMessages)
 	}
 	keypairs.Unlock()
+
+	// Expiration advances the generation even though the expired keypairs
+	// remain available for decryption until they are zeroed.
+	epoch := peer.keyEpoch.Add(1)
+	peer.roam.expirations.Add(1)
+	peer.recordKeypairEvent(RoamEventKeypairExpired, epoch)
 }
 
 func (peer *Peer) Stop() {
@@ -274,16 +308,6 @@ func (peer *Peer) Stop() {
 	peer.device.queue.encryption.wg.Done() // no more writes to encryption queue from us
 
 	peer.ZeroAndFlushAll()
-}
-
-func (peer *Peer) SetEndpointFromPacket(endpoint conn.Endpoint) {
-	peer.endpoint.Lock()
-	defer peer.endpoint.Unlock()
-	if peer.endpoint.disableRoaming {
-		return
-	}
-	peer.endpoint.clearSrcOnTx = false
-	peer.endpoint.val = endpoint
 }
 
 func (peer *Peer) markEndpointSrcForClearing() {

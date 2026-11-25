@@ -58,7 +58,7 @@ func (peer *Peer) keepKeyFreshReceiving() {
 		return
 	}
 	keypair := peer.keypairs.Current()
-	if keypair != nil && keypair.isInitiator && time.Since(keypair.created) > (RejectAfterTime-KeepaliveTimeout-RekeyTimeout) {
+	if keypair != nil && keypair.isInitiator && peer.device.now().Sub(keypair.created) > (RejectAfterTime-KeepaliveTimeout-RekeyTimeout) {
 		peer.timers.sentLastMinuteHandshake.Store(true)
 		peer.SendHandshakeInitiation(false)
 	}
@@ -161,7 +161,7 @@ func (device *Device) RoutineReceiveIncoming(maxBatchSize int, recv conn.Receive
 
 				// check keypair expiry
 
-				if keypair.created.Add(RejectAfterTime).Before(time.Now()) {
+				if keypair.created.Add(RejectAfterTime).Before(device.now()) {
 					continue
 				}
 
@@ -371,7 +371,7 @@ func (device *Device) RoutineHandshake(id int) {
 			peer.timersAnyAuthenticatedPacketReceived()
 
 			// update endpoint
-			peer.SetEndpointFromPacket(elem.endpoint)
+			peer.SetEndpointFromHandshake(elem.endpoint)
 
 			device.log.Verbosef("%v - Received handshake initiation", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -398,7 +398,7 @@ func (device *Device) RoutineHandshake(id int) {
 			}
 
 			// update endpoint
-			peer.SetEndpointFromPacket(elem.endpoint)
+			peer.SetEndpointFromHandshake(elem.endpoint)
 
 			device.log.Verbosef("%v - Received handshake response", peer)
 			peer.rxBytes.Add(uint64(len(elem.packet)))
@@ -456,7 +456,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 			validTailPacket = i
 			if peer.ReceivedWithKeypair(elem.keypair) {
-				peer.SetEndpointFromPacket(elem.endpoint)
+				peer.SetEndpointFromPacket(elem.endpoint, elem.keypair)
 				peer.timersHandshakeComplete()
 				peer.SendStagedPackets()
 			}
@@ -512,7 +512,7 @@ func (peer *Peer) RoutineSequentialReceiver(maxBatchSize int) {
 
 		peer.rxBytes.Add(rxBytesLen)
 		if validTailPacket >= 0 {
-			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint)
+			peer.SetEndpointFromPacket(elemsContainer.elems[validTailPacket].endpoint, elemsContainer.elems[validTailPacket].keypair)
 			peer.keepKeyFreshReceiving()
 			peer.timersAnyAuthenticatedPacketTraversal()
 			peer.timersAnyAuthenticatedPacketReceived()

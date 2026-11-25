@@ -30,6 +30,10 @@ type Keypair struct {
 	created      time.Time
 	localIndex   uint32
 	remoteIndex  uint32
+	// epoch is the key generation this keypair belongs to. It is assigned
+	// when the keypair is derived and compared against Peer.keyEpoch by the
+	// roaming gate.
+	epoch uint64
 }
 
 type Keypairs struct {

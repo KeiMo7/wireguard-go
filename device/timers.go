@@ -95,6 +95,10 @@ func expiredRetransmitHandshake(peer *Peer) {
 		if peer.timersActive() && !peer.timers.zeroKeyMaterial.IsPending() {
 			peer.timers.zeroKeyMaterial.Mod(RejectAfterTime * 3)
 		}
+
+		// Record the give-up without changing any of the logic above.
+		peer.roam.handshakeFailures.Add(1)
+		peer.recordKeypairEvent(RoamEventHandshakeGaveUp, peer.keyEpoch.Load())
 	} else {
 		peer.timers.handshakeAttempts.Add(1)
 		peer.device.log.Verbosef("%s - Handshake did not complete after %d seconds, retrying (try %d)", peer, int(RekeyTimeout.Seconds()), peer.timers.handshakeAttempts.Load()+1)

@@ -240,6 +240,45 @@ func (device *Device) handleDeviceLine(key, value string) error {
 		device.log.Verbosef("UAPI: Removing all peers")
 		device.RemoveAllPeers()
 
+	case "roam_policy":
+		var policy RoamPolicy
+		switch value {
+		case "open":
+			policy = RoamOpen
+		case "pinned":
+			policy = RoamPinned
+		case "limited":
+			policy = RoamLimited
+		default:
+			return ipcErrorf(ipc.IpcErrorInvalid, "invalid roam_policy: %v", value)
+		}
+		device.log.Verbosef("UAPI: Updating roam policy")
+		device.setRoamPolicy(policy)
+
+	case "roam_max_updates":
+		maxUpdates, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || maxUpdates < minRoamMaxUpdates || maxUpdates > maxRoamMaxUpdates {
+			return ipcErrorf(ipc.IpcErrorInvalid, "invalid roam_max_updates: %v", value)
+		}
+		device.log.Verbosef("UAPI: Updating roam max updates")
+		device.setRoamMaxUpdates(uint32(maxUpdates))
+
+	case "roam_window_seconds":
+		windowSeconds, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || windowSeconds < uint64(minRoamWindow/time.Second) || windowSeconds > uint64(maxRoamWindow/time.Second) {
+			return ipcErrorf(ipc.IpcErrorInvalid, "invalid roam_window_seconds: %v", value)
+		}
+		device.log.Verbosef("UAPI: Updating roam window")
+		device.setRoamWindow(time.Duration(windowSeconds) * time.Second)
+
+	case "roam_log_capacity":
+		capacity, err := strconv.ParseUint(value, 10, 32)
+		if err != nil || capacity < minRoamLogCapacity || capacity > maxRoamLogCapacity {
+			return ipcErrorf(ipc.IpcErrorInvalid, "invalid roam_log_capacity: %v", value)
+		}
+		device.log.Verbosef("UAPI: Updating roam log capacity")
+		device.setRoamLogCapacity(int(capacity))
+
 	default:
 		return ipcErrorf(ipc.IpcErrorInvalid, "invalid UAPI device key: %v", key)
 	}
@@ -346,6 +385,9 @@ func (device *Device) handlePeerLine(peer *ipcSetPeer, key, value string) error 
 		peer.endpoint.Lock()
 		defer peer.endpoint.Unlock()
 		peer.endpoint.val = endpoint
+		// Explicit UAPI configuration bypasses the gate and reopens the
+		// roaming window, clears the frozen state and pinned latch.
+		peer.resetRoamWindowLocked()
 
 	case "persistent_keepalive_interval":
 		device.log.Verbosef("%v - UAPI: Updating persistent keepalive interval", peer.Peer)
